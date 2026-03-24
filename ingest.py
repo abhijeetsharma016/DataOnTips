@@ -1,12 +1,18 @@
+import os
 from pathlib import Path
 from typing import Any, Dict, List
-
 import pandas as pd
 from neo4j import GraphDatabase
+from dotenv import load_dotenv
 
-URI = "neo4j+s://1a3499ff.databases.neo4j.io"
-USERNAME = "1a3499ff"
-PASSWORD = "w5d1wSAKahyDsBO_P31_5zTTKVs5DYx_oEXeOZdQPe8"
+# Load variables from .env file
+load_dotenv()
+
+URI = os.getenv("NEO4J_URI")
+USERNAME = os.getenv("NEO4J_USERNAME")
+PASSWORD = os.getenv("NEO4J_PASSWORD")
+
+# ... rest of your code remains the same ...
 
 DATASET_DIR = Path(__file__).parent / "sap-order-to-cash-dataset"
 BATCH_SIZE = 1000
