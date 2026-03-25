@@ -14,53 +14,61 @@ PASSWORD = os.getenv("NEO4J_PASSWORD")
 DATASET_DIR = Path(__file__).parent / "sap-order-to-cash-dataset"
 BATCH_SIZE = 1000
 
-FILE_MAP = {
-    "business_partners": "business_partners.csv",
-    "sales_order_headers": "sales_order_headers.csv",
-    "sales_order_items": "sales_order_items.csv",
-    "products": "products.csv",
-    "outbound_delivery_headers": "outbound_delivery_headers.csv",
-    "billing_document_headers": "billing_document_headers.csv",
+# Added the "items" folders which contain the relationship mappings
+FOLDER_MAP = {
+    "business_partners": "business_partners",
+    "sales_order_headers": "sales_order_headers",
+    "sales_order_items": "sales_order_items",
+    "products": "products",
+    "outbound_delivery_headers": "outbound_delivery_headers",
+    "outbound_delivery_items": "outbound_delivery_items", 
+    "billing_document_headers": "billing_document_headers",
+    "billing_document_items": "billing_document_items",
 }
 
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    df.columns = [str(c).strip() for c in df.columns]
+    df.columns = [str(c).strip().lower() for c in df.columns]
     return df
 
 def choose_column(df: pd.DataFrame, candidates: List[str], label: str) -> str:
-    cols_lower = {c.lower(): c for c in df.columns}
+    cols_lower = {c: c for c in df.columns}
     for candidate in candidates:
         if candidate.lower() in cols_lower:
             return cols_lower[candidate.lower()]
     raise ValueError(f"Could not find {label} column. Tried: {candidates}. Available: {list(df.columns)}")
 
-def safe_df(path: Path) -> pd.DataFrame:
-    # Smart file detection: checks exact name, name without .csv, or inside a folder
-    actual_path = None
-    if path.exists() and path.is_file():
-        actual_path = path
-    elif path.with_suffix('').exists() and path.with_suffix('').is_file():
-        actual_path = path.with_suffix('')
-    elif path.with_suffix('').is_dir():
-        folder = path.with_suffix('')
-        csvs = list(folder.glob("*.csv"))
-        if csvs:
-            actual_path = csvs[0]
+def safe_df(dataset_dir: Path, folder_name: str) -> pd.DataFrame:
+    target_dir = None
+    for path in dataset_dir.rglob(folder_name):
+        if path.is_dir():
+            target_dir = path
+            break
             
-    if not actual_path:
-        raise FileNotFoundError(f"Could not find data for {path.name} in {path.parent}. Check your folder structure!")
+    if not target_dir:
+        raise FileNotFoundError(f"CRITICAL: Could not find folder '{folder_name}' inside {dataset_dir}")
         
-    df = pd.read_csv(actual_path)
-    df = normalize_columns(df)
+    jsonl_files = list(target_dir.glob("*.jsonl"))
+    if not jsonl_files:
+        raise FileNotFoundError(f"CRITICAL: No .jsonl files found in {target_dir}")
+        
+    print(f"Found {len(jsonl_files)} file(s) for {folder_name}. Combining...")
     
-    # Fill text-like columns with empty string and numeric columns with 0.
-    for col in df.columns:
-        if pd.api.types.is_numeric_dtype(df[col]):
-            df[col] = df[col].fillna(0)
+    dfs = []
+    for file in jsonl_files:
+        df = pd.read_json(file, lines=True)
+        dfs.append(df)
+        
+    combined_df = pd.concat(dfs, ignore_index=True)
+    combined_df = normalize_columns(combined_df)
+    
+    for col in combined_df.columns:
+        if pd.api.types.is_numeric_dtype(combined_df[col]):
+            combined_df[col] = combined_df[col].fillna(0)
         else:
-            df[col] = df[col].fillna("").astype(str)
-    return df
+            combined_df[col] = combined_df[col].fillna("").astype(str)
+            
+    return combined_df
 
 def chunked(records: List[Dict[str, Any]], size: int):
     for i in range(0, len(records), size):
@@ -72,7 +80,6 @@ def run_unwind_batches(driver, query: str, records: List[Dict[str, Any]], label:
         return
     total = len(records)
     processed = 0
-    # FIX: We must specify the database name here for Aura Free
     with driver.session(database=USERNAME) as session:
         for batch in chunked(records, BATCH_SIZE):
             session.execute_write(lambda tx, b=batch: tx.run(query, rows=b).consume())
@@ -80,7 +87,7 @@ def run_unwind_batches(driver, query: str, records: List[Dict[str, Any]], label:
     print(f"Ingested {label}: {processed}/{total}")
 
 def build_frames() -> Dict[str, pd.DataFrame]:
-    return {key: safe_df(DATASET_DIR / file_name) for key, file_name in FILE_MAP.items()}
+    return {key: safe_df(DATASET_DIR, folder_name) for key, folder_name in FOLDER_MAP.items()}
 
 def prepare_records(frames: Dict[str, pd.DataFrame]):
     bp = frames["business_partners"]
@@ -88,29 +95,39 @@ def prepare_records(frames: Dict[str, pd.DataFrame]):
     soi = frames["sales_order_items"]
     prd = frames["products"]
     odh = frames["outbound_delivery_headers"]
+    odi = frames["outbound_delivery_items"]
     bdh = frames["billing_document_headers"]
+    bdi = frames["billing_document_items"]
 
-    customer_id_col = choose_column(bp, ["business_partner_id", "customer_id", "partner_id", "businesspartner", "business_partner"], "Customer ID")
-    order_id_col = choose_column(soh, ["sales_order_id", "sales_order", "order_id", "vbeln"], "Order ID")
-    order_customer_col = choose_column(soh, ["customer_id", "business_partner_id", "sold_to_party", "partner_id", "kunnr"], "Order -> Customer reference")
-    item_order_col = choose_column(soi, ["sales_order_id", "sales_order", "order_id", "vbeln"], "Order reference in sales order items")
-    item_product_col = choose_column(soi, ["product_id", "material_id", "material", "matnr"], "Product reference in sales order items")
-    product_id_col = choose_column(prd, ["product_id", "material_id", "material", "matnr"], "Product ID")
-    delivery_id_col = choose_column(odh, ["delivery_id", "outbound_delivery_id", "delivery", "vbeln"], "Delivery ID")
-    delivery_order_col = choose_column(odh, ["sales_order_id", "sales_order", "order_id", "reference_sales_order", "preceding_document"], "Delivery -> Order reference")
-    billing_id_col = choose_column(bdh, ["billing_document_id", "billing_id", "invoice_id", "billing_document", "vbeln"], "Billing Document ID")
-    billing_delivery_col = choose_column(bdh, ["delivery_id", "outbound_delivery_id", "reference_delivery", "preceding_document"], "Billing -> Delivery reference")
-
-    customers = [{"customer_id": str(row[customer_id_col]).strip(), "name": str(row.get("name", "")).strip(), "country": str(row.get("country", "")).strip(), "city": str(row.get("city", "")).strip()} for _, row in bp.iterrows() if str(row[customer_id_col]).strip()]
-    orders = [{"order_id": str(row[order_id_col]).strip(), "customer_id": str(row[order_customer_col]).strip(), "order_date": str(row.get("order_date", "")).strip(), "currency": str(row.get("currency", "")).strip()} for _, row in soh.iterrows() if str(row[order_id_col]).strip()]
-    products = [{"product_id": str(row[product_id_col]).strip(), "product_name": str(row.get("product_name", row.get("name", ""))).strip(), "product_group": str(row.get("product_group", "")).strip()} for _, row in prd.iterrows() if str(row[product_id_col]).strip()]
-    deliveries = [{"delivery_id": str(row[delivery_id_col]).strip(), "order_id": str(row[delivery_order_col]).strip(), "delivery_date": str(row.get("delivery_date", "")).strip()} for _, row in odh.iterrows() if str(row[delivery_id_col]).strip()]
-    billings = [{"billing_id": str(row[billing_id_col]).strip(), "delivery_id": str(row[billing_delivery_col]).strip(), "billing_date": str(row.get("billing_date", "")).strip()} for _, row in bdh.iterrows() if str(row[billing_id_col]).strip()]
+    # Exact SAP column names added to candidates
+    customer_id_col = choose_column(bp, ["businesspartner", "business_partner"], "Customer ID")
+    order_id_col = choose_column(soh, ["salesorder", "sales_order"], "Order ID")
+    order_customer_col = choose_column(soh, ["soldtoparty", "customer_id"], "Order -> Customer reference")
     
-    order_product_pairs = [{"order_id": str(row[item_order_col]).strip(), "product_id": str(row[item_product_col]).strip(), "quantity": float(row.get("order_quantity", row.get("quantity", 0)) or 0)} for _, row in soi.iterrows() if str(row[item_order_col]).strip() and str(row[item_product_col]).strip()]
+    item_order_col = choose_column(soi, ["salesorder", "sales_order"], "Order reference in items")
+    item_product_col = choose_column(soi, ["product", "material"], "Product reference in items")
+    product_id_col = choose_column(prd, ["product", "material"], "Product ID")
+    
+    delivery_id_col = choose_column(odh, ["deliverydocument", "outbounddelivery"], "Delivery ID")
+    billing_id_col = choose_column(bdh, ["billingdocument", "billing_document"], "Billing Document ID")
+
+    # The relationship links live in the Items files
+    odi_del_col = choose_column(odi, ["deliverydocument", "outbounddelivery"], "Delivery ID in items")
+    odi_ord_col = choose_column(odi, ["referencesddocument", "referencesalesorder", "salesorder"], "Delivery -> Order reference")
+
+    bdi_bil_col = choose_column(bdi, ["billingdocument"], "Billing ID in items")
+    bdi_del_col = choose_column(bdi, ["referencesddocument", "referencedocument"], "Billing -> Delivery reference")
+
+    customers = [{"customer_id": str(row[customer_id_col]).strip(), "name": str(row.get("businesspartnerfullname", row.get("name", ""))).strip(), "country": str(row.get("country", "")).strip(), "city": str(row.get("city", "")).strip()} for _, row in bp.iterrows() if str(row[customer_id_col]).strip()]
+    orders = [{"order_id": str(row[order_id_col]).strip(), "customer_id": str(row[order_customer_col]).strip(), "order_date": str(row.get("creationdate", "")).strip(), "currency": str(row.get("transactioncurrency", "")).strip()} for _, row in soh.iterrows() if str(row[order_id_col]).strip()]
+    products = [{"product_id": str(row[product_id_col]).strip(), "product_name": str(row.get("productname", "")).strip(), "product_group": str(row.get("productgroup", "")).strip()} for _, row in prd.iterrows() if str(row[product_id_col]).strip()]
+    deliveries = [{"delivery_id": str(row[delivery_id_col]).strip(), "order_id": "", "delivery_date": str(row.get("creationdate", "")).strip()} for _, row in odh.iterrows() if str(row[delivery_id_col]).strip()]
+    billings = [{"billing_id": str(row[billing_id_col]).strip(), "delivery_id": "", "billing_date": str(row.get("billingdocumentdate", row.get("creationdate", ""))).strip()} for _, row in bdh.iterrows() if str(row[billing_id_col]).strip()]
+    
+    order_product_pairs = [{"order_id": str(row[item_order_col]).strip(), "product_id": str(row[item_product_col]).strip(), "quantity": float(row.get("requestedquantity", 0) or 0)} for _, row in soi.iterrows() if str(row[item_order_col]).strip() and str(row[item_product_col]).strip()]
     customer_order_pairs = [{"customer_id": o["customer_id"], "order_id": o["order_id"]} for o in orders if o["customer_id"] and o["order_id"]]
-    order_delivery_pairs = [{"order_id": d["order_id"], "delivery_id": d["delivery_id"]} for d in deliveries if d["order_id"] and d["delivery_id"]]
-    delivery_billing_pairs = [{"delivery_id": b["delivery_id"], "billing_id": b["billing_id"]} for b in billings if b["delivery_id"] and b["billing_id"]]
+    order_delivery_pairs = [{"order_id": str(row[odi_ord_col]).strip(), "delivery_id": str(row[odi_del_col]).strip()} for _, row in odi.iterrows() if str(row[odi_ord_col]).strip() and str(row[odi_del_col]).strip()]
+    delivery_billing_pairs = [{"delivery_id": str(row[bdi_del_col]).strip(), "billing_id": str(row[bdi_bil_col]).strip()} for _, row in bdi.iterrows() if str(row[bdi_del_col]).strip() and str(row[bdi_bil_col]).strip()]
 
     return {
         "customers": customers, "orders": orders, "products": products, "deliveries": deliveries,
@@ -119,7 +136,7 @@ def prepare_records(frames: Dict[str, pd.DataFrame]):
     }
 
 def ingest():
-    print(f"Reading CSVs from: {DATASET_DIR}")
+    print(f"Reading data from: {DATASET_DIR}")
     frames = build_frames()
     data = prepare_records(frames)
 
@@ -146,7 +163,6 @@ def ingest():
         driver.verify_connectivity()
         print("Connected to Neo4j.")
 
-        # FIX: We must specify the database name here for Aura Free
         with driver.session(database=USERNAME) as session:
             for q in create_constraints:
                 session.run(q).consume()
