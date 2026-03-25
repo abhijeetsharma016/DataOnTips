@@ -4,7 +4,7 @@ from typing import Dict, List, Tuple
 
 import streamlit as st
 from dotenv import load_dotenv
-from langchain.prompts import PromptTemplate
+from langchain_core.prompts import PromptTemplate
 from langchain_community.graphs import Neo4jGraph
 from streamlit_agraph import Config, Edge, Node, agraph
 
@@ -75,7 +75,8 @@ def init_services():
 
     os.environ["GOOGLE_API_KEY"] = google_api_key
 
-    graph = Neo4jGraph(url=uri, username=username, password=password)
+    # FIX: Added database=username for Neo4j Aura Free tier compatibility
+    graph = Neo4jGraph(url=uri, username=username, password=password, database=username)
     graph.refresh_schema()
 
     llm = ChatGoogleGenerativeAI(
@@ -125,7 +126,7 @@ def init_services():
         verbose=False,
         return_intermediate_steps=True,
         top_k=30,
-        allow_dangerous_requests=False,
+        allow_dangerous_requests=True,
     )
 
     return graph, chain
