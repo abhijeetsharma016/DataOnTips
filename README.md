@@ -2,8 +2,8 @@
 
 🔗 **Live Demo:** [https://a7g978jyhfxnmwgpy3xbm8.streamlit.app/](https://a7g978jyhfxnmwgpy3xbm8.streamlit.app/)
 ## 📸 Demo Screenshot
+<img width="2300" height="1000" alt="image" src="https://github.com/user-attachments/assets/cf46e758-38d0-4a09-b119-91f023c6cec6" />
 
-![DataOnTips Screenshot](./assets/demo.png)
 
 ---
 
