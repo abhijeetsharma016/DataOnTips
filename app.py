@@ -80,7 +80,7 @@ def init_services():
     graph.refresh_schema()
 
     llm = ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash",
+        model="gemini-2.5-flash", 
         temperature=0,
         convert_system_message_to_human=True,
     )
@@ -92,6 +92,8 @@ def init_services():
             "Use only the provided schema and relationship directions.\n"
             "Never invent labels, relationship types, or properties.\n"
             "Return only a valid Cypher query.\n\n"
+            "IMPORTANT: All IDs (customer_id, order_id, product_id, delivery_id, billing_id) are stored as STRINGS. "
+            "You MUST use quotes around them in your MATCH statements (e.g., {{customer_id: '320000083'}}).\n\n"
             "Critical business patterns:\n"
             "- Ranking products by billed volume follows: "
             "(o:Order)-[:CONTAINS]->(p:Product), "
@@ -332,6 +334,16 @@ def main():
     render_sidebar(connected)
     if not connected:
         st.stop()
+
+    # --- MOVED DEBUG CODE HERE ---
+    st.subheader("Raw Data Check")
+    if st.button("Check Customer 320000083"):
+        try:
+            result = graph.query("MATCH (c:Customer {customer_id: '320000083'}) RETURN c")
+            st.write(result)
+        except Exception as e:
+            st.error(f"Error: {e}")
+    # -----------------------------
 
     left_col, right_col = st.columns([1.05, 1.2], gap="large")
 
