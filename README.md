@@ -1,7 +1,9 @@
 # 🚀 DataOnTips — Graph RAG for SAP Order-to-Cash
 
 🔗 **Live Demo:** [https://a7g978jyhfxnmwgpy3xbm8.streamlit.app/](https://a7g978jyhfxnmwgpy3xbm8.streamlit.app/)
-📦 **GitHub Repo:** [https://github.com/abhijeetsharma016/DataOnTips](https://github.com/abhijeetsharma016/DataOnTips)
+## 📸 Demo Screenshot
+
+![DataOnTips Screenshot](./assets/demo.png)
 
 ---
 
