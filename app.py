@@ -89,32 +89,37 @@ def init_services():
         input_variables=["schema", "question"],
         template=(
             "You are an expert Neo4j Cypher generator for the DataOnTips SAP Order-to-Cash graph.\n"
-            "Use only the provided schema and relationship directions.\n"
+            "Use ONLY the provided schema and relationship directions.\n"
             "Never invent labels, relationship types, or properties.\n"
-            "Return only a valid Cypher query.\n\n"
-            "IMPORTANT: All IDs (customer_id, order_id, product_id, delivery_id, billing_id) are stored as STRINGS. "
-            "You MUST use quotes around them in your MATCH statements (e.g., {{customer_id: '320000083'}}).\n\n"
-            "Critical business patterns:\n"
-            "- Ranking products by billed volume follows: "
-            "(o:Order)-[:CONTAINS]->(p:Product), "
-            "(o)-[:FULFILLED_BY]->(d:Delivery), "
-            "(d)-[:BILLED_IN]->(b:BillingDocument)\n"
-            "- Flow tracing for billing document follows reverse chain from "
-            "BillingDocument <-[:BILLED_IN]- Delivery <-[:FULFILLED_BY]- Order.\n"
-            "- Delivered but not billed means orders with a Delivery but without BillingDocument.\n\n"
+            "Return ONLY a valid Cypher query, no markdown formatting or explanations.\n\n"
+            
+            "CRITICAL RULES:\n"
+            "1. Node properties MUST match exactly: Customer nodes have 'customer_id', 'name', 'country', 'city'.\n"
+            "2. All IDs (customer_id, order_id, product_id, delivery_id, billing_id) are STRINGS. You MUST wrap them in single quotes (e.g., {{customer_id: '320000083'}}).\n\n"
+            
+            "EXAMPLES:\n"
+            "Question: What is the name of customer 320000083?\n"
+            "Cypher: MATCH (c:Customer {{customer_id: '320000083'}}) RETURN c.name\n\n"
+            
+            "Question: What city is customer 320000083 located in?\n"
+            "Cypher: MATCH (c:Customer {{customer_id: '320000083'}}) RETURN c.city\n\n"
+            
+            "Question: Trace the flow for billing document 90504270\n"
+            "Cypher: MATCH (b:BillingDocument {{billing_id: '90504270'}}) OPTIONAL MATCH (d:Delivery)-[:BILLED_IN]->(b) OPTIONAL MATCH (o:Order)-[:FULFILLED_BY]->(d) RETURN b.billing_id, d.delivery_id, o.order_id\n\n"
+            
             "Schema:\n{schema}\n\n"
             "Question:\n{question}\n"
         ),
     )
 
+
     qa_prompt = PromptTemplate(
         input_variables=["context", "question"],
         template=(
-            "You are a grounded analyst for DataOnTips.\n"
-            "Answer using ONLY the provided context from the Neo4j graph query results.\n"
-            "If context is insufficient, say exactly: "
-            "'I could not find enough data in the graph to answer that.'\n"
-            "Do not add external facts.\n\n"
+            "You are a helpful business analyst for DataOnTips.\n"
+            "The following 'Context' contains data retrieved from the Neo4j database that directly answers the user's question.\n"
+            "Formulate a clear, natural language answer using ONLY this context.\n"
+            "If the context is empty or says 'None', say exactly: 'I could not find enough data in the graph to answer that.'\n\n"
             "Context:\n{context}\n\n"
             "Question:\n{question}\n"
         ),
@@ -244,7 +249,15 @@ def run_custom_business_tool(graph: Neo4jGraph, question: str) -> Tuple[bool, st
 
 
 def ask_grounded_chain(chain: GraphCypherQAChain, question: str) -> str:
+    # Run the chain
     result = chain.invoke({"query": question})
+    
+    # Print the exact Cypher query and retrieved DB context to your terminal!
+    print("\n--- LLM DEBUG INFO ---")
+    print(f"Generated Cypher: {result.get('intermediate_steps', [{}])[0].get('query', 'None')}")
+    print(f"Database Context: {result.get('intermediate_steps', [{}, {}])[1].get('context', 'None')}")
+    print("----------------------\n")
+    
     answer = result.get("result", "").strip()
     if not answer:
         return "I could not find enough data in the graph to answer that."
